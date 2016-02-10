@@ -1,0 +1,195 @@
+#!/usr/bin/env php
+<?php
+
+$options = [
+  'extension' => '.tpl.php',
+  'recursive' => false,
+];
+
+// First we need to get some arguments
+if ($argc > 1) {
+    // Look for commonly found arguments
+    for ($i = 1; $i <= $argc; $i++) {
+        switch ($argv[1]) {
+            case '-h':
+            case '--help':
+                print <<<HELP
+php2twig: Convert PHPTemplate files to twig
+
+Usage:
+  Provide a location to a file or directory as argument to convert all .tpl.php
+  files.
+
+Options:
+  -h    Display this help
+  -r    Recursive
+  -e    Extension (default: .tpl.php)
+  -v    Verbose
+HELP;
+                break;
+
+            // Extension
+            case '-e':
+                if (!isset($argv[$i + 1])) {
+                    die("You must provide an extension");
+                }
+                $options['extension'] = $argv[$i + 1];
+                $i++;
+                break;
+
+            // Recursive
+            case '-r':
+                $options['extension'] = true;
+                break;
+
+            // Files
+            default:
+                // Treat locations
+                $files = [];
+                break 2;
+        }
+    }
+} else {
+    $str = file_get_contents('php://stdin');
+    if ($str) {
+        print convert_phptemplate($str);
+    } else {
+        die("No file or directory specified");
+    }
+}
+
+/**
+ * Function
+ *
+ * @param $str string
+ * @return array
+ */
+function convert_phptemplate($str)
+{
+    $lines = explode("\n", $str);
+    $ret = [];
+    foreach ($lines as $line) {
+        if (preg_match_all('@<\?(php)? (.*)\?>@U', $line, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $expression = trim($match[2], ' ');
+                $treated = false;
+                //echo "-------\nTreating $expression\n--------";
+
+                // If
+                $expression = _treat_if($expression, $treated);
+
+                // Foreach
+                if (!$treated) {
+                    $expression = _treat_foreach($expression, $treated);
+                }
+
+                // Echo
+                if (!$treated) {
+                    $expression = _treat_echo($expression, $treated);
+                }
+
+                // At this point, if we have not treated the expression, it should be done manually
+                if (!$treated) {
+                    $expression = '{# '.$expression.' #}';
+                }
+
+                // Semi-column
+                $expression = preg_replace('@(.*);@U', '$1', $expression);
+
+                $line = str_replace($match[0], $expression, $line);
+            }
+        }
+        $ret[] = $line;
+    }
+    return implode("\n", $ret);
+}
+
+/**
+ * @param $expression
+ * @param $treated
+ * @return mixed
+ */
+function _treat_echo($expression, &$treated)
+{
+    $new_expression = preg_replace_callback(
+        '@^(echo|print) (render\()?(.*)(?(2)\);)$@',
+        function ($matches) {
+            return '{{ '.handle_expression($matches[3]).' }}';
+        },
+        $expression
+    );
+
+    $treated = $new_expression != $expression;
+    return $new_expression;
+}
+
+/**
+ * @param $expression
+ * @param $treated
+ * @return mixed
+ */
+function _treat_foreach($expression, &$treated)
+{
+    $new_expression = preg_replace_callback(
+        '@foreach ?\((.*) as \$(.*) => \$(.*)\):@',
+        function ($matches) {
+            return '{% for '.$matches[2].', '.$matches[3].' in '.handle_expression($matches[1]).' %}';
+        },
+        $expression
+    );
+    $new_expression = preg_replace_callback(
+        '@foreach ?\((.*) as \$(.*)\):@',
+        function ($matches) {
+            return '{% for '.$matches[2].' in '.handle_expression($matches[1]).' %}';
+        },
+        $new_expression
+    );
+    $new_expression = preg_replace('@endforeach;@', '{% endfor %}', $new_expression);
+
+    $treated = $new_expression != $expression;
+    return $new_expression;
+}
+
+/**
+ * @param $expression
+ * @param $treated
+ * @return mixed
+ */
+function _treat_if($expression, &$treated)
+{
+    $new_expression = preg_replace_callback(
+        '@if ?\((.*)\):@',
+        function ($matches) {
+            return '{% if '.handle_expression($matches[1]).' %}';
+        },
+        $expression
+    );
+    $new_expression = preg_replace('@else:@', '{% else %}', $new_expression);
+    $new_expression = preg_replace('@endif;@', '{% endif %}', $new_expression);
+    $treated = $new_expression != $expression;
+    return $new_expression;
+}
+
+/**
+ * @param $expression
+ * @return mixed
+ */
+function handle_expression($expression)
+{
+    // variable
+    $expression = str_replace('$', '', $expression);
+    // boolean
+    $expression = str_replace('!', 'not ', $expression);
+    $expression = preg_replace('@(.*) \&\& (.*)@U', '$1 and $2', $expression);
+    $expression = preg_replace('@(.*) \|\| (.*)@U', '$1 or $2', $expression);
+    // arrays and objects
+    $expression = preg_replace('@\[\'?"?([a-z_]*)\'?"?\]@i', '.$1', $expression);
+    $expression = str_replace('->', '.', $expression);
+    // translation
+    $expression = preg_replace('@^t\((.*)\);?$@U', '$1|t', $expression);
+    // isset/empty
+    $expression = preg_replace('@isset\((.*)\)@U', '$1', $expression);
+    $expression = preg_replace('@empty\((.*)\)@U', '$1', $expression);
+    return $expression;
+}
+
