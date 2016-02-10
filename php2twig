@@ -27,6 +27,7 @@ Options:
   -h    Display this help
   -r    Recursive
   -e    Extension (default: .tpl.php)
+  -ne   New extension (default: .tpl.twig)
   -v    Verbose
 HELP;
                 break;
@@ -64,8 +65,7 @@ HELP;
                 $file = $argv[$i];
                 if (is_file($file)) {
                     $files[] = $file;
-                }
-                else {
+                } else {
                     echo "$file is not a valid file path.\n";
                 }
         }
@@ -73,7 +73,7 @@ HELP;
 
     // Treat files
     if (!empty($files)) {
-        foreach($files as $file) {
+        foreach ($files as $file) {
             $converted = convert_phptemplate(file_get_contents($file));
             $new_name = str_replace($options['extension'], $options['new_extension'], basename($file));
             echo "Converted $file to $new_name\n";
@@ -198,8 +198,15 @@ function _treat_if($expression, &$treated)
         },
         $expression
     );
-    $new_expression = preg_replace('@else:@', '{% else %}', $new_expression);
-    $new_expression = preg_replace('@endif;@', '{% endif %}', $new_expression);
+    $new_expression = preg_replace_callback(
+        '@elseif ?\((.*)\):@',
+        function ($matches) {
+            return '{% elseif '.handle_expression($matches[1]).' %}';
+        },
+        $new_expression
+    );
+    $new_expression = preg_replace('@else ?:@', '{% else %}', $new_expression);
+    $new_expression = preg_replace('@endif ?;@', '{% endif %}', $new_expression);
     $treated = $new_expression != $expression;
 
     return $new_expression;
