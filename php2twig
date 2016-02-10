@@ -2,12 +2,15 @@
 <?php
 
 $options = [
-  'extension' => '.tpl.php',
-  'recursive' => false,
+    'extension' => '.tpl.php',
+    'new_extension' => '.tpl.twig',
+    'recursive' => false,
 ];
-
 // First we need to get some arguments
 if ($argc > 1) {
+    $files = [];
+    $current_dir = getcwd();
+
     // Look for commonly found arguments
     for ($i = 1; $i <= $argc; $i++) {
         switch ($argv[1]) {
@@ -37,16 +40,44 @@ HELP;
                 $i++;
                 break;
 
+            // New extension
+            case '-ne':
+                if (!isset($argv[$i + 1])) {
+                    die("You must provide an extension");
+                }
+                $options['new_extension'] = $argv[$i + 1];
+                $i++;
+                break;
+
             // Recursive
             case '-r':
-                $options['extension'] = true;
+                $options['recursive'] = true;
                 break;
 
             // Files
             default:
+                if (!isset($argv[$i])) {
+                    break 2;
+                }
+
                 // Treat locations
-                $files = [];
-                break 2;
+                $file = $argv[$i];
+                if (is_file($file)) {
+                    $files[] = $file;
+                }
+                else {
+                    echo "$file is not a valid file path.\n";
+                }
+        }
+    }
+
+    // Treat files
+    if (!empty($files)) {
+        foreach($files as $file) {
+            $converted = convert_phptemplate(file_get_contents($file));
+            $new_name = str_replace($options['extension'], $options['new_extension'], basename($file));
+            echo "Converted $file to $new_name\n";
+            file_put_contents(dirname($file).'/'.$new_name, $converted, FILE_TEXT);
         }
     }
 } else {
@@ -101,6 +132,7 @@ function convert_phptemplate($str)
         }
         $ret[] = $line;
     }
+
     return implode("\n", $ret);
 }
 
@@ -120,6 +152,7 @@ function _treat_echo($expression, &$treated)
     );
 
     $treated = $new_expression != $expression;
+
     return $new_expression;
 }
 
@@ -147,6 +180,7 @@ function _treat_foreach($expression, &$treated)
     $new_expression = preg_replace('@endforeach;@', '{% endfor %}', $new_expression);
 
     $treated = $new_expression != $expression;
+
     return $new_expression;
 }
 
@@ -167,6 +201,7 @@ function _treat_if($expression, &$treated)
     $new_expression = preg_replace('@else:@', '{% else %}', $new_expression);
     $new_expression = preg_replace('@endif;@', '{% endif %}', $new_expression);
     $treated = $new_expression != $expression;
+
     return $new_expression;
 }
 
@@ -190,6 +225,7 @@ function handle_expression($expression)
     // isset/empty
     $expression = preg_replace('@isset\((.*)\)@U', '$1', $expression);
     $expression = preg_replace('@empty\((.*)\)@U', '$1', $expression);
+
     return $expression;
 }
 
