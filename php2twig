@@ -237,6 +237,8 @@ function handle_expression($expression)
     $expression = str_replace('->', '.', $expression);
     // translation
     $expression = preg_replace('@^t\((.*)\);?$@U', '$1|t', $expression);
+    // translation
+    $expression = preg_replace('@^drupal_attributes\((.*)\);?$@U', '$1|attributes', $expression);
     // isset/empty
     $expression = preg_replace('@isset\((.*)\)@U', '$1', $expression);
     $expression = preg_replace('@empty\((.*)\)@U', 'not $1', $expression);
