@@ -227,6 +227,7 @@ function handle_expression($expression)
     // variable
     $expression = str_replace('$', '', $expression);
     // boolean
+    $expression = preg_replace('@!empty\((.*)\)@U', '$1', $expression);
     $expression = str_replace('!', 'not ', $expression);
     $expression = preg_replace('@(.*) \&\& (.*)@U', '$1 and $2', $expression);
     $expression = preg_replace('@(.*) \|\| (.*)@U', '$1 or $2', $expression);
@@ -237,7 +238,7 @@ function handle_expression($expression)
     $expression = preg_replace('@^t\((.*)\);?$@U', '$1|t', $expression);
     // isset/empty
     $expression = preg_replace('@isset\((.*)\)@U', '$1', $expression);
-    $expression = preg_replace('@empty\((.*)\)@U', '$1', $expression);
+    $expression = preg_replace('@empty\((.*)\)@U', 'not $1', $expression);
 
     return $expression;
 }
