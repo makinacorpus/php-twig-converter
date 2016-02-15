@@ -12,8 +12,9 @@ if ($argc > 1) {
     $current_dir = getcwd();
 
     // Look for commonly found arguments
-    for ($i = 1; $i <= $argc; $i++) {
-        switch ($argv[1]) {
+    $cargv = count($argv);
+    for ($i = 1; $i <= $argc && $i <= $cargv - 1; $i++) {
+        switch ($argv[$i]) {
             case '-h':
             case '--help':
                 print <<<HELP
@@ -29,6 +30,11 @@ Options:
   -e    Extension (default: .tpl.php)
   -ne   New extension (default: .tpl.twig)
   -v    Verbose
+
+Examples:
+  - ./php2twig -ne .html.twig **/*.tpl.php
+  - ./php2twig -r 1 .
+
 HELP;
                 break;
 
