@@ -183,7 +183,7 @@ function _treat_foreach($expression, &$treated)
         },
         $new_expression
     );
-    $new_expression = preg_replace('@endforeach;@', '{% endfor %}', $new_expression);
+    $new_expression = preg_replace('@endforeach ?;?@', '{% endfor %}', $new_expression);
 
     $treated = $new_expression != $expression;
 
@@ -212,7 +212,7 @@ function _treat_if($expression, &$treated)
         $new_expression
     );
     $new_expression = preg_replace('@else ?:@', '{% else %}', $new_expression);
-    $new_expression = preg_replace('@endif ?;@', '{% endif %}', $new_expression);
+    $new_expression = preg_replace('@endif ?;?@', '{% endif %}', $new_expression);
     $treated = $new_expression != $expression;
 
     return $new_expression;
