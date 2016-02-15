@@ -229,6 +229,7 @@ function handle_expression($expression)
     // boolean
     $expression = preg_replace('@!empty\((.*)\)@U', '$1', $expression);
     $expression = str_replace('!', 'not ', $expression);
+    $expression = str_replace('===', '==', $expression);
     $expression = preg_replace('@(.*) \&\& (.*)@U', '$1 and $2', $expression);
     $expression = preg_replace('@(.*) \|\| (.*)@U', '$1 or $2', $expression);
     // arrays and objects
