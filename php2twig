@@ -2,10 +2,11 @@
 <?php
 
 $options = [
-    'extension' => '.tpl.php',
+    'extension'     => '.tpl.php',
     'new_extension' => '.tpl.twig',
-    'recursive' => false,
+    'recursive'     => false,
 ];
+
 // First we need to get some arguments
 if ($argc > 1) {
     $files = [];
@@ -80,9 +81,9 @@ HELP;
     // Treat files
     if (!empty($files)) {
         foreach ($files as $file) {
-            $converted = convert_phptemplate(file_get_contents($file));
             $new_name = str_replace($options['extension'], $options['new_extension'], basename($file));
-            echo "Converted $file to $new_name\n";
+            echo "Converting $file to $new_name\n";
+            $converted = convert_phptemplate(file_get_contents($file));
             file_put_contents(dirname($file).'/'.$new_name, $converted, FILE_TEXT);
         }
     }
@@ -103,146 +104,257 @@ HELP;
  */
 function convert_phptemplate($str)
 {
-    $lines = explode("\n", $str);
-    $ret = [];
-    foreach ($lines as $line) {
-        if (preg_match_all('@<\?(php)? (.*)\?>@U', $line, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $match) {
-                $expression = trim($match[2], ' ');
-                $treated = false;
-                //echo "-------\nTreating $expression\n--------";
+    $tokens = token_get_all($str);
+    $output = '';
+    $mapping = [
+        T_ARRAY, // array()
+        T_BREAK, // TODO 	break 	break",
+        T_CASE, // , // TODO  	case 	switch",
+        T_COMMENT, // "                  => '{# %s #}', // TODO or #, and /* */ 	comments",
+        T_CONCAT_EQUAL, // "             => '', // TODO 	.= 	assignment operators",
+        T_CONTINUE, // ", // TODO 	continue 	continue",
+        T_CURLY_OPEN, // ", // TODO 	 	complex variable parsed syntax",
+        T_DEFAULT, // ", // TODO 	default 	switch",
+        T_DO, // ", // TODO 	do    do..while",
+        T_DOLLAR_OPEN_CURLY_BRACES, // complex variable parsed syntax",
+        T_ELSEIF, // elseif 	elseif",
+        T_EMPTY, // empty    empty()",
+        T_ENCAPSED_AND_WHITESPACE, // \" \$a\" 	constant part of string with variables",
+        T_ENDSWITCH, // endswitch 	switch, alternative syntax",
+        T_ENDWHILE, // endwhile 	while, alternative syntax",
+        T_FOR, // for 	for",
+        T_INCLUDE, // include() 	include",
+        T_INCLUDE_ONCE, // include_once() 	include_once",
+        T_NUM_STRING, // \"\$a[0]\" 	numeric array index inside string",
+        T_REQUIRE, // require() 	require",
+        T_REQUIRE_ONCE, // require_once() 	require_once",
+        T_STRING_VARNAME, // \"$\{a 	complex variable parsed syntax",
+        T_SWITCH, // switch 	switch",
+    ];
+    // LIFO list of end tags
+    $nesting = [];
+    $flags = [];
+    while ($token = current($tokens)) {
+        $index = key($tokens);
+        if (is_array($token) /*&& in_array($token[0], $mapping)*/) {
+            echo "Index $index, Line {$token[2]}: ", token_name($token[0]), "\t\t{$token[1]}", PHP_EOL;
+        } else {
+            echo "Index $index, $token", PHP_EOL;
+        }
+        if (is_array($token)) {
+            $name = $token[0];
+            $value = $token[1];
 
-                // If
-                $expression = _treat_if($expression, $treated);
+            if (isset($tokens[$index + 1])) {
+                $i = $index;
+                while (isset($tokens[$i + 1]) && $tokens[$i + 1][0] == T_WHITESPACE) {
+                    $i++;
+                }
+                $next = $tokens[$i + 1];
+                if (is_array($next)) {
+                    if (in_array($next[0], [T_OR_EQUAL, T_PLUS_EQUAL, T_MUL_EQUAL, T_MINUS_EQUAL, T_MUL_EQUAL])) {
+                        $output .= $value.' '.substr($token[1], 0, 1).' '.$value;
+                        next($tokens);
+                        continue;
+                    } elseif ($next[0] == T_INC) {
+                        $output .= "{% $value = $value + 1 %}";
+                        next($tokens);
+                        continue;
+                    } elseif ($next[0] == T_DEC) {
+                        $output .= "{% $value = $value - 1 %}";
+                        next($tokens);
+                        continue;
+                    }
+                }
+            }
 
-                // Foreach
-                if (!$treated) {
-                    $expression = _treat_foreach($expression, $treated);
+            if (in_array($name, [
+                T_OR_EQUAL,
+                T_PLUS_EQUAL,
+                T_MUL_EQUAL,
+                T_MINUS_EQUAL,
+                T_ISSET,
+                T_OPEN_TAG,
+                T_DOC_COMMENT,
+            ])) {
+                // Ignore
+            } elseif (in_array($name, [T_CLOSE_TAG, T_INLINE_HTML])) {
+                $nest = array_pop($nesting);
+                // Remove last space for filters
+                if ($nest[0] == '|') {
+                    $output = rtrim($output, ' ');
+                }
+                $output .= $nest;
+                $output .= str_replace("?>", "", $value);
+            } elseif (in_array($name, [
+                T_WHITESPACE,
+                T_LOGICAL_AND,
+                T_LOGICAL_OR,
+                T_CONSTANT_ENCAPSED_STRING,
+                T_LNUMBER,
+                T_DNUMBER,
+                T_IS_GREATER_OR_EQUAL,
+                T_IS_SMALLER_OR_EQUAL,
+            ])) {
+                $output .= $value;
+            } elseif ($name == T_VARIABLE) {
+                $output .= substr($value, 1);
+            } elseif ($name == T_ECHO || $name == T_PRINT) {
+                $output .= '{{';
+                $nesting[] = '}}';
+            } elseif ($name == T_STRING) {
+                if ($value == 't') {
+                    $nest = array_pop($nesting);
+                    $nesting[] = '|t '.$nest;
+                } elseif ($value == 'render') {
+                    // Ignore
+                } elseif (in_array('inside_object_method', $flags) && next($tokens) !== '(') {
+                    $output .= $value;
+                } else {
+                    $output .= $value.'(';
+                    $nesting[] = ')';
+                    $flags[] = 'inside_func_call';
+                    // TODO fire warning here
+                }
+                // TODO maybe handle theme() ?
+            } elseif ($name == T_IS_EQUAL || $name == T_IS_IDENTICAL) {
+                $output .= ' is ';
+            } elseif ($name == T_IS_NOT_EQUAL || $name == T_IS_NOT_IDENTICAL) {
+                $output .= ' is not ';
+            } elseif ($name == T_BOOLEAN_AND) {
+                $output .= ' and ';
+            } elseif ($name == T_BOOLEAN_OR) {
+                $output .= ' or ';
+            } elseif ($name == T_IF) {
+                $output .= '{% if';
+                $nesting[] = '%}';
+            } elseif ($name == T_ENDIF) {
+                $output .= '{% endif %}';
+            } elseif ($name == T_ENDFOR || $name == T_ENDFOREACH) {
+                $output .= '{% endfor %}';
+            } elseif ($name == T_ELSEIF) {
+                $output .= '{% elseif ';
+                $nesting[] = '%}';
+            } elseif ($name == T_ELSE) {
+                $output .= '{% else %} ';
+            } elseif ($name == T_OBJECT_OPERATOR) {
+                $flags[] = 'inside_object_method';
+                $output .= '.';
+            } elseif ($name == T_COMMENT) {
+                if ($value[1] == '*') {
+                    $value = preg_replace('@/\*(.+)\s+\*/@sU', '{# $1 #}', $value);
+                    $value = preg_replace('@\s{3}\*\s@s', '', $value);
+                    $output .= $value;
+                } else {
+                    $output .= "{# ";
+                    prev($tokens);
+                    $matches = null;
+                    while (($token = next($tokens)) && is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT])) {
+                        if ($token[0] == T_COMMENT) {
+                            if (isset($matches[2])) {
+                                $output .= "$matches[2]";
+                            }
+                            preg_match('@^//\s?(.*)(\s*)@', $token[1], $matches);
+                            $output .= "$matches[1]";
+                        }
+                        else {
+                            $matches[2] .= "$token[1]";
+                        }
+                    }
+                    $output .= " #}".$matches[2];
+                    prev($tokens);
+                }
+            } elseif ($name == T_FOREACH) {
+                $output .= '{% for';
+                while (!is_array($token) || !in_array($token[0], [T_VARIABLE, T_STRING])) {
+                    $token = next($tokens);
+                }
+                $iterated = substr($token[1], 1);
+                while (!is_array($token) || $token[0] !== T_AS) {
+                    $token = next($tokens);
+                }
+                while (!is_array($token) || $token[0] !== T_VARIABLE) {
+                    $token = next($tokens);
+                }
+                $index_name = substr($token[1], 1);
+
+                // Try to find value in next four tokens
+                $i = 6;
+                while (($token = next($tokens)) && $i) {
+                    if (is_array($token) && $token[0] == T_VARIABLE) {
+                        $value = substr($token[1], 1);
+                        $output .= " $index_name, $value in $iterated %}";
+                        break;
+                    }
+                    $i--;
+                }
+                if (!$i) {
+                    $output .= " $index_name in $iterated %}";
+                    // We've got too far, go back a bit
+                    prev($tokens);
+                    prev($tokens);
+                    prev($tokens);
+                    prev($tokens);
                 }
 
-                // Echo
-                if (!$treated) {
-                    $expression = _treat_echo($expression, $treated);
-                }
-
-                // At this point, if we have not treated the expression, it should be done manually
-                if (!$treated) {
-                    $expression = '{# '.$expression.' #}';
-                }
-
-                // Semi-column
-                $expression = preg_replace('@(.*);@U', '$1', $expression);
-
-                $line = str_replace($match[0], $expression, $line);
+            } else {
+                // unsupported
+                echo "UNSUPPORTED ".token_name($token[0])."\n";
+            }
+        } else {
+            switch ($token) {
+                case ';':
+                    if (in_array('inside_func_call', $flags)) {
+                        $output .= array_pop($nesting);
+                        unset($flags[array_search('inside_func_call', $flags)]);
+                    }
+                    break;
+                case ':':
+                    if (in_array('inside_ternary', $flags)) {
+                        $output .= $token;
+                        unset($flags[array_search('inside_ternary', $flags)]);
+                    }
+                    break;
+                case '(':
+                case ')':
+                case '{':
+                case '}':
+                case ']':
+                    break;
+                case '[':
+                    $next = next($tokens);
+                    if (is_array($next) && $next[0] == T_CONSTANT_ENCAPSED_STRING) {
+                        $output .= '.'.substr($next[1], 1, -1);
+                    } elseif (is_array($next) && $next[0] == T_VARIABLE) {
+                        $output .= '.'.substr($next[1], 1);
+                    } elseif (is_array($next) && $next[0] == T_LNUMBER) {
+                        $output .= '.'.$next[1];
+                    } elseif (is_array($next)) {
+                        die("Unsupported array/object traversing with ".token_name($next[0]));
+                    } else {
+                        $output .= "[$next]";
+                    }
+                    break;
+                case '.':
+                    $output .= '~';
+                    break;
+                case '?':
+                    $flags[] = 'inside_ternary';
+                    $output .= $token;
+                    break;
+                case ',':
+                case '%':
+                case '*':
+                case '/':
+                case '+':
+                case '-':
+                    $output .= $token;
+                    break;
             }
         }
-        $ret[] = $line;
+        next($tokens);
     }
 
-    return implode("\n", $ret);
+    echo $str, $output, "\n";
+    return $output;
 }
-
-/**
- * @param $expression
- * @param $treated
- * @return mixed
- */
-function _treat_echo($expression, &$treated)
-{
-    $new_expression = preg_replace_callback(
-        '@^(echo|print) (render\()?(.*)(?(2)\);)$@',
-        function ($matches) {
-            return '{{ '.handle_expression($matches[3]).' }}';
-        },
-        $expression
-    );
-
-    $treated = $new_expression != $expression;
-
-    return $new_expression;
-}
-
-/**
- * @param $expression
- * @param $treated
- * @return mixed
- */
-function _treat_foreach($expression, &$treated)
-{
-    $new_expression = preg_replace_callback(
-        '@foreach ?\((.*) as \$(.*) => \$(.*)\):@',
-        function ($matches) {
-            return '{% for '.$matches[2].', '.$matches[3].' in '.handle_expression($matches[1]).' %}';
-        },
-        $expression
-    );
-    $new_expression = preg_replace_callback(
-        '@foreach ?\((.*) as \$(.*)\):@',
-        function ($matches) {
-            return '{% for '.$matches[2].' in '.handle_expression($matches[1]).' %}';
-        },
-        $new_expression
-    );
-    $new_expression = preg_replace('@endforeach ?;?@', '{% endfor %}', $new_expression);
-
-    $treated = $new_expression != $expression;
-
-    return $new_expression;
-}
-
-/**
- * @param $expression
- * @param $treated
- * @return mixed
- */
-function _treat_if($expression, &$treated)
-{
-    $new_expression = preg_replace_callback(
-        '@if ?\((.*)\):@',
-        function ($matches) {
-            return '{% if '.handle_expression($matches[1]).' %}';
-        },
-        $expression
-    );
-    $new_expression = preg_replace_callback(
-        '@elseif ?\((.*)\):@',
-        function ($matches) {
-            return '{% elseif '.handle_expression($matches[1]).' %}';
-        },
-        $new_expression
-    );
-    $new_expression = preg_replace('@else ?:@', '{% else %}', $new_expression);
-    $new_expression = preg_replace('@endif ?;?@', '{% endif %}', $new_expression);
-    $treated = $new_expression != $expression;
-
-    return $new_expression;
-}
-
-/**
- * @param $expression
- * @return mixed
- */
-function handle_expression($expression)
-{
-    // variable
-    $expression = str_replace('$', '', $expression);
-    // boolean
-    $expression = preg_replace('@!empty\((.*)\)@U', '$1', $expression);
-    $expression = str_replace('!', 'not ', $expression);
-    $expression = str_replace('===', '==', $expression);
-    $expression = preg_replace('@(.*) \&\& (.*)@U', '$1 and $2', $expression);
-    $expression = preg_replace('@(.*) \|\| (.*)@U', '$1 or $2', $expression);
-    // arrays and objects
-    $expression = preg_replace('@\[\'?"?([a-z_]*)\'?"?\]@i', '.$1', $expression);
-    $expression = str_replace('->', '.', $expression);
-    // translation
-    $expression = preg_replace('@^t\((.*)\);?$@U', '$1|t', $expression);
-    // translation
-    $expression = preg_replace('@^drupal_attributes\((.*)\);?$@U', '$1|attributes', $expression);
-    // isset/empty
-    $expression = preg_replace('@isset\((.*)\)@U', '$1', $expression);
-    $expression = preg_replace('@empty\((.*)\)@U', 'not $1', $expression);
-
-    return $expression;
-}
-
