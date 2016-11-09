@@ -110,14 +110,11 @@ function convert_phptemplate($str)
         T_ARRAY, // array()
         T_BREAK, // TODO 	break 	break",
         T_CASE, // , // TODO  	case 	switch",
-        T_COMMENT, // "                  => '{# %s #}', // TODO or #, and /* */ 	comments",
-        T_CONCAT_EQUAL, // "             => '', // TODO 	.= 	assignment operators",
         T_CONTINUE, // ", // TODO 	continue 	continue",
         T_CURLY_OPEN, // ", // TODO 	 	complex variable parsed syntax",
         T_DEFAULT, // ", // TODO 	default 	switch",
         T_DO, // ", // TODO 	do    do..while",
         T_DOLLAR_OPEN_CURLY_BRACES, // complex variable parsed syntax",
-        T_ELSEIF, // elseif 	elseif",
         T_EMPTY, // empty    empty()",
         T_ENCAPSED_AND_WHITESPACE, // \" \$a\" 	constant part of string with variables",
         T_ENDSWITCH, // endswitch 	switch, alternative syntax",
@@ -131,14 +128,18 @@ function convert_phptemplate($str)
         T_STRING_VARNAME, // \"$\{a 	complex variable parsed syntax",
         T_SWITCH, // switch 	switch",
     ];
+
     // LIFO list of end tags
     $nesting = [];
     $flags = [];
+
+    $debug = 1;
+
     while ($token = current($tokens)) {
         $index = key($tokens);
-        if (is_array($token) /*&& in_array($token[0], $mapping)*/) {
+        if (is_array($token) && ($debug || in_array($token[0], $mapping))) {
             echo "Index $index, Line {$token[2]}: ", token_name($token[0]), "\t\t{$token[1]}", PHP_EOL;
-        } else {
+        } elseif ($debug) {
             echo "Index $index, $token", PHP_EOL;
         }
         if (is_array($token)) {
@@ -159,9 +160,11 @@ function convert_phptemplate($str)
                     } elseif ($next[0] == T_INC) {
                         $output .= "{% $value = $value + 1 %}";
                         next($tokens);
+                        next($tokens);
                         continue;
                     } elseif ($next[0] == T_DEC) {
                         $output .= "{% $value = $value - 1 %}";
+                        next($tokens);
                         next($tokens);
                         continue;
                     }
@@ -174,6 +177,7 @@ function convert_phptemplate($str)
                 T_MUL_EQUAL,
                 T_MINUS_EQUAL,
                 T_ISSET,
+                T_DOUBLE_ARROW,
                 T_OPEN_TAG,
                 T_DOC_COMMENT,
             ])) {
@@ -228,18 +232,28 @@ function convert_phptemplate($str)
             } elseif ($name == T_IF) {
                 $output .= '{% if';
                 $nesting[] = '%}';
+                $flags[] = 'inside_condition';
+                $flags[] = 'inside_if';
             } elseif ($name == T_ENDIF) {
+                if (in_array('inside_if', $flags)) {
+                    unset($flags[array_search('inside_if', $flags)]);
+                }
                 $output .= '{% endif %}';
             } elseif ($name == T_ENDFOR || $name == T_ENDFOREACH) {
                 $output .= '{% endfor %}';
             } elseif ($name == T_ELSEIF) {
                 $output .= '{% elseif ';
+                $flags[] = 'inside_condition';
                 $nesting[] = '%}';
             } elseif ($name == T_ELSE) {
                 $output .= '{% else %} ';
             } elseif ($name == T_OBJECT_OPERATOR) {
                 $flags[] = 'inside_object_method';
                 $output .= '.';
+            } elseif ($name == T_EMPTY) {
+                // !empty() is managed in '!'
+                $flags[] = 'inside_empty_condition';
+                $nesting[] = 'is empty ';
             } elseif ($name == T_COMMENT) {
                 if ($value[1] == '*') {
                     $value = preg_replace('@/\*(.+)\s+\*/@sU', '{# $1 #}', $value);
@@ -249,15 +263,15 @@ function convert_phptemplate($str)
                     $output .= "{# ";
                     prev($tokens);
                     $matches = null;
-                    while (($token = next($tokens)) && is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT])) {
+                    while (($token = next($tokens)) && is_array($token) && in_array($token[0],
+                            [T_WHITESPACE, T_COMMENT])) {
                         if ($token[0] == T_COMMENT) {
                             if (isset($matches[2])) {
                                 $output .= "$matches[2]";
                             }
                             preg_match('@^//\s?(.*)(\s*)@', $token[1], $matches);
                             $output .= "$matches[1]";
-                        }
-                        else {
+                        } else {
                             $matches[2] .= "$token[1]";
                         }
                     }
@@ -308,23 +322,43 @@ function convert_phptemplate($str)
                         $output .= array_pop($nesting);
                         unset($flags[array_search('inside_func_call', $flags)]);
                     }
+                    if (in_array('}}', $nesting)) {
+                        $output .= ' '.array_pop($nesting);
+                    }
                     break;
                 case ':':
                     if (in_array('inside_ternary', $flags)) {
                         $output .= $token;
                         unset($flags[array_search('inside_ternary', $flags)]);
                     }
+                    if (in_array('inside_condition', $flags)) {
+                        $output .= ' '.array_pop($nesting);
+                        unset($flags[array_search('inside_condition', $flags)]);
+                    }
                     break;
                 case '(':
                 case ')':
-                case '{':
-                case '}':
                 case ']':
+                    break;
+                case '{':
+                    if (count($nesting)) {
+                        $output .= array_pop($nesting);
+                    }
+                    break;
+                case '}':
+                    if (in_array('inside_if', $flags)) {
+                        $output .= '{% endif %}';
+                        unset($flags[array_search('inside_if', $flags)]);
+                    }
                     break;
                 case '[':
                     $next = next($tokens);
                     if (is_array($next) && $next[0] == T_CONSTANT_ENCAPSED_STRING) {
-                        $output .= '.'.substr($next[1], 1, -1);
+                        if ($next[1][1] == '#') {
+                            $output .= "[$next[1]]";
+                        } else {
+                            $output .= '.'.substr($next[1], 1, -1);
+                        }
                     } elseif (is_array($next) && $next[0] == T_VARIABLE) {
                         $output .= '.'.substr($next[1], 1);
                     } elseif (is_array($next) && $next[0] == T_LNUMBER) {
@@ -335,10 +369,23 @@ function convert_phptemplate($str)
                         $output .= "[$next]";
                     }
                     break;
+                case '!':
+                    $next = next($tokens);
+                    if (is_array($next) && $next[0] == T_EMPTY) {
+                        // ignore
+                    } else {
+                        prev($tokens);
+                        $output .= "not ";
+                    }
+                    break;
                 case '.':
                     $output .= '~';
                     break;
                 case '?':
+                    if (in_array('inside_empty_condition', $flags)) {
+                        $output .= array_pop($nesting);
+                        unset($flags[array_search('inside_empty_condition', $flags)]);
+                    }
                     $flags[] = 'inside_ternary';
                     $output .= $token;
                     break;
@@ -355,6 +402,9 @@ function convert_phptemplate($str)
         next($tokens);
     }
 
-    echo $str, $output, "\n";
+    if ($debug) {
+        echo $str, $output, "\n";
+    }
+
     return $output;
 }
