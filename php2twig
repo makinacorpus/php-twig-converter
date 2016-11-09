@@ -106,46 +106,53 @@ function convert_phptemplate($str)
 {
     $tokens = token_get_all($str);
     $output = '';
+
+    // Unsupported tokens
     $mapping = [
         T_ARRAY, // array()
-        T_BREAK, // TODO 	break 	break",
-        T_CASE, // , // TODO  	case 	switch",
-        T_CONTINUE, // ", // TODO 	continue 	continue",
-        T_CURLY_OPEN, // ", // TODO 	 	complex variable parsed syntax",
-        T_DEFAULT, // ", // TODO 	default 	switch",
-        T_DO, // ", // TODO 	do    do..while",
+        T_BREAK, // break",
+        T_CASE, // , // case in a switch",
+        T_CONTINUE, // ", // continue in a loop",
+        T_CURLY_OPEN, // ", // complex variable parsed syntax",
+        T_DEFAULT, // ", // default in a switch",
+        T_DO, // ", // do in a do..while",
         T_DOLLAR_OPEN_CURLY_BRACES, // complex variable parsed syntax",
-        T_EMPTY, // empty    empty()",
-        T_ENCAPSED_AND_WHITESPACE, // \" \$a\" 	constant part of string with variables",
-        T_ENDSWITCH, // endswitch 	switch, alternative syntax",
-        T_ENDWHILE, // endwhile 	while, alternative syntax",
-        T_FOR, // for 	for",
-        T_INCLUDE, // include() 	include",
-        T_INCLUDE_ONCE, // include_once() 	include_once",
-        T_NUM_STRING, // \"\$a[0]\" 	numeric array index inside string",
-        T_REQUIRE, // require() 	require",
-        T_REQUIRE_ONCE, // require_once() 	require_once",
-        T_STRING_VARNAME, // \"$\{a 	complex variable parsed syntax",
-        T_SWITCH, // switch 	switch",
+        T_ENCAPSED_AND_WHITESPACE, // \" \$a\" constant part of string with variables",
+        T_ENDSWITCH, // endswitch switch, alternative syntax",
+        T_ENDWHILE, // endwhile while, alternative syntax",
+        T_FOR, // for",
+        T_INCLUDE, // include()",
+        T_INCLUDE_ONCE, // include_once()",
+        T_NUM_STRING, // \"\$a[0]\" numeric array index inside string",
+        T_REQUIRE, // require()",
+        T_REQUIRE_ONCE, // require_once()",
+        T_STRING_VARNAME, // \"$\{a complex variable parsed syntax",
+        T_SWITCH, // switch",
     ];
 
     // LIFO list of end tags
     $nesting = [];
+    // list of flags
     $flags = [];
 
-    $debug = 1;
+    $debug = 0;
 
     while ($token = current($tokens)) {
         $index = key($tokens);
+
+        // Display information about tokens
         if (is_array($token) && ($debug || in_array($token[0], $mapping))) {
             echo "Index $index, Line {$token[2]}: ", token_name($token[0]), "\t\t{$token[1]}", PHP_EOL;
         } elseif ($debug) {
             echo "Index $index, $token", PHP_EOL;
         }
+
         if (is_array($token)) {
+            // Token, not characters
             $name = $token[0];
             $value = $token[1];
 
+            // Some tokens depends on following expressions (+=, ++, etc.)
             if (isset($tokens[$index + 1])) {
                 $i = $index;
                 while (isset($tokens[$i + 1]) && $tokens[$i + 1][0] == T_WHITESPACE) {
@@ -179,10 +186,12 @@ function convert_phptemplate($str)
                 T_ISSET,
                 T_DOUBLE_ARROW,
                 T_OPEN_TAG,
-                T_DOC_COMMENT,
+                T_DOC_COMMENT, // TODO Convert to twig doc?
             ])) {
-                // Ignore
+                // Ignore these tokens
+
             } elseif (in_array($name, [T_CLOSE_TAG, T_INLINE_HTML])) {
+                // When closing tags or displaying HTML, end nesting
                 $nest = array_pop($nesting);
                 // Remove last space for filters
                 if ($nest[0] == '|') {
@@ -190,6 +199,7 @@ function convert_phptemplate($str)
                 }
                 $output .= $nest;
                 $output .= str_replace("?>", "", $value);
+
             } elseif (in_array($name, [
                 T_WHITESPACE,
                 T_LOGICAL_AND,
@@ -200,13 +210,20 @@ function convert_phptemplate($str)
                 T_IS_GREATER_OR_EQUAL,
                 T_IS_SMALLER_OR_EQUAL,
             ])) {
+                // These are the same in twig
                 $output .= $value;
+
             } elseif ($name == T_VARIABLE) {
+                // Variable, remove leading '$'
                 $output .= substr($value, 1);
+
             } elseif ($name == T_ECHO || $name == T_PRINT) {
+                // Print something
                 $output .= '{{';
                 $nesting[] = '}}';
+
             } elseif ($name == T_STRING) {
+                // Function call
                 if ($value == 't') {
                     $nest = array_pop($nesting);
                     $nesting[] = '|t '.$nest;
@@ -218,48 +235,65 @@ function convert_phptemplate($str)
                     $output .= $value.'(';
                     $nesting[] = ')';
                     $flags[] = 'inside_func_call';
-                    // TODO fire warning here
+                    echo "Unsupported function $value().\n";
                 }
                 // TODO maybe handle theme() ?
+
             } elseif ($name == T_IS_EQUAL || $name == T_IS_IDENTICAL) {
                 $output .= ' is ';
+
             } elseif ($name == T_IS_NOT_EQUAL || $name == T_IS_NOT_IDENTICAL) {
                 $output .= ' is not ';
+
             } elseif ($name == T_BOOLEAN_AND) {
                 $output .= ' and ';
+
             } elseif ($name == T_BOOLEAN_OR) {
                 $output .= ' or ';
+
             } elseif ($name == T_IF) {
+                // There should be an expression after this, so we close it in ':' or '{'
                 $output .= '{% if';
                 $nesting[] = '%}';
                 $flags[] = 'inside_condition';
                 $flags[] = 'inside_if';
+
             } elseif ($name == T_ENDIF) {
                 if (in_array('inside_if', $flags)) {
                     unset($flags[array_search('inside_if', $flags)]);
                 }
                 $output .= '{% endif %}';
+
             } elseif ($name == T_ENDFOR || $name == T_ENDFOREACH) {
                 $output .= '{% endfor %}';
+
             } elseif ($name == T_ELSEIF) {
+                // There should be an expression after this, so we close it in ':' or '{'
                 $output .= '{% elseif ';
                 $flags[] = 'inside_condition';
                 $nesting[] = '%}';
+
             } elseif ($name == T_ELSE) {
                 $output .= '{% else %} ';
+
             } elseif ($name == T_OBJECT_OPERATOR) {
+                // This is object call or property ->
                 $flags[] = 'inside_object_method';
                 $output .= '.';
+
             } elseif ($name == T_EMPTY) {
-                // !empty() is managed in '!'
+                // !empty() is managed in '!', flag to be closed in '?'
                 $flags[] = 'inside_empty_condition';
                 $nesting[] = 'is empty ';
+
             } elseif ($name == T_COMMENT) {
                 if ($value[1] == '*') {
+                    // Multiline comment, remove ' * ' on each line
                     $value = preg_replace('@/\*(.+)\s+\*/@sU', '{# $1 #}', $value);
                     $value = preg_replace('@\s{3}\*\s@s', '', $value);
                     $output .= $value;
                 } else {
+                    // Single line comment that may be multiline (lol), so take care of this
                     $output .= "{# ";
                     prev($tokens);
                     $matches = null;
@@ -278,7 +312,9 @@ function convert_phptemplate($str)
                     $output .= " #}".$matches[2];
                     prev($tokens);
                 }
+
             } elseif ($name == T_FOREACH) {
+                // foreach($iterated as $index => $value) -> for(value in iterated) _or_ for(index, value in iterated)
                 $output .= '{% for';
                 while (!is_array($token) || !in_array($token[0], [T_VARIABLE, T_STRING])) {
                     $token = next($tokens);
@@ -313,11 +349,13 @@ function convert_phptemplate($str)
 
             } else {
                 // unsupported
-                echo "UNSUPPORTED ".token_name($token[0])."\n";
+                echo "WARNING: UNSUPPORTED ".token_name($token[0])."\n";
             }
         } else {
+            // Characters
             switch ($token) {
                 case ';':
+                    // This close a function call or a print
                     if (in_array('inside_func_call', $flags)) {
                         $output .= array_pop($nesting);
                         unset($flags[array_search('inside_func_call', $flags)]);
@@ -326,62 +364,83 @@ function convert_phptemplate($str)
                         $output .= ' '.array_pop($nesting);
                     }
                     break;
+
                 case ':':
+                    // This must print inside ternary, else we don't care
                     if (in_array('inside_ternary', $flags)) {
                         $output .= $token;
                         unset($flags[array_search('inside_ternary', $flags)]);
                     }
+                    // This might close a if expression
                     if (in_array('inside_condition', $flags)) {
                         $output .= ' '.array_pop($nesting);
                         unset($flags[array_search('inside_condition', $flags)]);
                     }
                     break;
+
                 case '(':
                 case ')':
                 case ']':
+                    // Ignored
                     break;
+
                 case '{':
+                    // This might close an expression
                     if (count($nesting)) {
                         $output .= array_pop($nesting);
                     }
                     break;
+
                 case '}':
+                    // This might close a if block
                     if (in_array('inside_if', $flags)) {
                         $output .= '{% endif %}';
                         unset($flags[array_search('inside_if', $flags)]);
                     }
                     break;
+
                 case '[':
+                    // Accessing key of an array
                     $next = next($tokens);
                     if (is_array($next) && $next[0] == T_CONSTANT_ENCAPSED_STRING) {
                         if ($next[1][1] == '#') {
+                            // verify unsupported first characters
                             $output .= "[$next[1]]";
                         } else {
+                            // else remove quotes
                             $output .= '.'.substr($next[1], 1, -1);
                         }
                     } elseif (is_array($next) && $next[0] == T_VARIABLE) {
+                        // Remove leading '$'
                         $output .= '.'.substr($next[1], 1);
                     } elseif (is_array($next) && $next[0] == T_LNUMBER) {
+                        // no treatment on numbers
                         $output .= '.'.$next[1];
                     } elseif (is_array($next)) {
                         die("Unsupported array/object traversing with ".token_name($next[0]));
                     } else {
-                        $output .= "[$next]";
+                        die("Unsupported array/object traversing with $next");
                     }
                     break;
+
                 case '!':
+                    // Verify next token is not empty()
                     $next = next($tokens);
                     if (is_array($next) && $next[0] == T_EMPTY) {
-                        // ignore
+                        // if empty(), ignore
                     } else {
                         prev($tokens);
                         $output .= "not ";
                     }
                     break;
+
                 case '.':
+                    // Concatenation
                     $output .= '~';
                     break;
+
                 case '?':
+                    // Ternary condition
                     if (in_array('inside_empty_condition', $flags)) {
                         $output .= array_pop($nesting);
                         unset($flags[array_search('inside_empty_condition', $flags)]);
@@ -389,12 +448,14 @@ function convert_phptemplate($str)
                     $flags[] = 'inside_ternary';
                     $output .= $token;
                     break;
+
                 case ',':
                 case '%':
                 case '*':
                 case '/':
                 case '+':
                 case '-':
+                    // Same as twig
                     $output .= $token;
                     break;
             }
