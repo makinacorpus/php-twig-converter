@@ -40,5 +40,42 @@ can override it with `-ne`:
     $ ./php2twig node.tpl.php -ne ".html.twig"
     $ ls
     node.html.twig node.tpl.php
-    
+
+## Demo
+
+`$ ./php2twig modules/block/block.tpl.php`
+
+```
+<div id="<?php print $block_html_id; ?>" class="<?php print $classes; ?>"<?php print $attributes; ?>>
+
+  <?php print render($title_prefix); ?>
+<?php if ($block->subject): ?>
+  <h2<?php print $title_attributes; ?>><?php print $block->subject ?></h2>
+<?php endif;?>
+  <?php print render($title_suffix); ?>
+
+  <div class="content"<?php print $content_attributes; ?>>
+    <?php print $content ?>
+  </div>
+</div>
+```
+
+will convert to
+
+```
+<div id="{{ block_html_id }} " class="{{ classes }} "{{ attributes }} >
+
+  {{ title_prefix }}
+{% if block.subject %}
+  <h2{{ title_attributes }} >{{ block.subject}}</h2>
+{% endif %}
+  {{ title_suffix }}
+
+  <div class="content"{{ content_attributes }} >
+    {{ content }}
+  </div>
+</div>
+```
+
+
 
